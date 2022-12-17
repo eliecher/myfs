@@ -11,7 +11,7 @@ int getblk(block_no_t block_no, buffer_t *o_buffer)
 	if (buffer.header->status & BUFF_OCCUPIED)
 	{
 		// ! this scenario shouldn't occur in non-multiprogramming environment
-		perror("buffer unavailable :: logical error in program\n");
+		// perror("buffer unavailable: logical error in program\n");
 		return -1;
 	}
 	if (buffer.header->block_no == block_no)
@@ -44,11 +44,11 @@ int bread(block_no_t block_no, buffer_t *o_buffer)
 {
 	if (block_no >= super_block.num_blocks)
 	{
-		sprintf(err, "bread: block %u is out of range\n", block_no);
-		return 0;
+/* 		sprintf(err, "bread: block %u is out of range\n", block_no);
+		perror(err); */
+		return -1;
 	}
-
-	if (getblk(block_no, o_buffer))
+	if (getblk(block_no, o_buffer)!=0)
 	{
 		return -1;
 	}
@@ -57,32 +57,19 @@ int bread(block_no_t block_no, buffer_t *o_buffer)
 		/* buffer contains valid data. No need to do anything */
 		return 0;
 	}
-	if (lseek(disk_fd, block_no * MY_BLK_SIZE, SEEK_SET) == -1)
-	{
-		// ! this error shouldn't occur because of 1st conditional check
-		sprintf(err, "bread: could not locate block %u\n", block_no);
-		return -1;
-	}
-	if (read(disk_fd, o_buffer->data, MY_BLK_SIZE) != MY_BLK_SIZE)
-	{
-		sprintf(err, "bread: could not read block %u\n", block_no);
-		return -1;
-	}
-	o_buffer->header->status |= BUFF_VALIDDATA;
+	lseek(disk_fd, block_no * MY_BLK_SIZE, SEEK_SET);
+	read(disk_fd, o_buffer->data, MY_BLK_SIZE);
+	BUFF_SET_FIELD(*o_buffer,BUFF_VALIDDATA);
+	BUFF_REM_FIELD(*o_buffer,BUFF_MODIFIED);
 	return 0;
 }
 /* writes a buffer to disk. */
 int bwrite(buffer_t *i_buffer)
 {
-	if ((i_buffer->header->status & (BUFF_MODIFIED | BUFF_VALIDDATA)) == (BUFF_MODIFIED | BUFF_VALIDDATA))
+	if (BUFF_IS_SET(*i_buffer,BUFF_MODIFIED | BUFF_VALIDDATA))
 	{ /* write skipped if data is unmodified or invalid */
-		if (lseek(disk_fd, MY_BLK_SIZE * i_buffer->header->block_no, SEEK_SET) == -1 || write(disk_fd, i_buffer->data, MY_BLK_SIZE) != MY_BLK_SIZE)
-		{
-			// ! these errors shouldn't occur
-			sprintf(err, "bwrite: error in writing block %u to disk\n", i_buffer->header->block_no);
-			perror(err);
-			return -1;
-		}
+		lseek(disk_fd, MY_BLK_SIZE * i_buffer->header->block_no, SEEK_SET);
+		write(disk_fd, i_buffer->data, MY_BLK_SIZE);
 	}
 	i_buffer->header->status &= ~BUFF_MODIFIED;
 	/* validity of data remains the same */

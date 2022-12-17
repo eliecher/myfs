@@ -21,18 +21,18 @@ int myopen(const char *filename, int mode, ...)
 			va_end(l);
 			if (mycreat(filename, perm) != 0)
 			{
-				perror("open: failed to create file\n");
+				/* 				perror("open: failed to create file\n"); */
 				return -1;
 			}
 			if (namei(filename, &inode) != 0)
 			{
-				perror("open: failed to open file\n");
+				/* 				perror("open: failed to open file\n"); */
 				return -1;
 			}
 		}
 		else
 		{
-			perror("open: failed to open file\n");
+			/* 			perror("open: failed to open file\n"); */
 			return -1;
 		}
 	}
@@ -45,7 +45,7 @@ int myopen(const char *filename, int mode, ...)
 	}
 	if (fd == MAX_OPEN_FILES)
 	{
-		perror("open: no free file descriptor\n");
+		/* 		perror("open: no free file descriptor\n"); */
 		iput(inode);
 		return -1;
 	}
@@ -269,7 +269,6 @@ ssize_t mywrite(int fd, byte_t *src, size_t n)
 		INO_REM_FIELD(inode, INODE_LOCKED);
 		return 0;
 	}
-
 	while (n > 0)
 	{
 		if (bmap(inode, offset, &block_no, &byte_offset, &bytes_in_block) != 0)
@@ -278,33 +277,6 @@ ssize_t mywrite(int fd, byte_t *src, size_t n)
 				return -1;
 			break;
 		}
-		if (block_no == 0)
-		{
-			/*
-			 *	cases:
-			 *	1) the offset is inside file but the block is 0
-			 *	2) the offset is out of the file
-			 *
-			 */
-			block_no_t logical_block_no = offset / MY_BLK_SIZE;
-			if (add_physical_block(inode, logical_block_no, &block_no) != 0)
-			{
-				// ! cannot add block, write stops.
-				break;
-			}
-			if (offset >= inode->disk_inode.size_on_disk)
-			{
-				/* in this case, the file has been extended */
-				inode->disk_inode.size = offset;
-			}
-			inode->disk_inode.size_on_disk += MY_BLK_SIZE;
-			INO_SET_FIELD(inode, INODE_MODIFIED);
-		}
-		/*
-		 * cases possible:
-		 * 1) write can be completed within this block
-		 * 2) we use whole block but write cannot be completed
-		 */
 		offset_t remaining = MY_BLK_SIZE - byte_offset;
 		size_t to_write;
 		if (n <= remaining)
@@ -315,18 +287,44 @@ ssize_t mywrite(int fd, byte_t *src, size_t n)
 		{
 			to_write = remaining;
 		}
-		bread(block_no, &buffer);
-		if (offset + to_write > inode->disk_inode.size)
+		if (block_no == 0)
 		{
-			/* if write goes beyond file, increase file size */
-			inode->disk_inode.size = offset + n;
+			/*
+			 *	cases:
+			 *	1) the offset is inside file but the block is 0
+			 *	2) the offset is out of the file
+			 *
+			 */
+			if (offset >= inode->disk_inode.size_on_disk)
+			{
+				/* in this case, the file has to be extended */
+				inode->disk_inode.size = offset;
+			}
+			inode->disk_inode.size_on_disk += MY_BLK_SIZE;
+			INO_SET_FIELD(inode, INODE_MODIFIED);
+			balloc(&buffer);
 		}
-		memcpy(buffer.data->b + byte_offset, src + written, n);
+		else
+			bread(block_no, &buffer);
+		/*
+		 * cases possible:
+		 * 1) write can be completed within this block
+		 * 2) we use whole block but write cannot be completed
+		 */
+		if (offset + to_write > inode->disk_inode.size) /* if write goes beyond file, increase file size */
+			inode->disk_inode.size = offset + to_write;
+		memcpy(buffer.data->b + byte_offset, src + written, to_write);
 		written += to_write;
 		offset += to_write;
 		n -= to_write;
 		BUFF_SET_FIELD(buffer, BUFF_MODIFIED);
+		block_no_t physical_block_no = buffer.header->block_no;
 		brelse(&buffer);
+		if (block_no == 0)
+		{
+			block_no_t logical_block_no = offset / MY_BLK_SIZE;
+			add_physical_block(inode, logical_block_no, physical_block_no);
+		}
 	}
 	file_table[fd].offset += written;
 	INO_REM_FIELD(inode, INODE_LOCKED);

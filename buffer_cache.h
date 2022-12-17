@@ -9,4 +9,5 @@
 
 #define BUFF_SET_FIELD(buffer,field) ((buffer).header->status |= (field))
 #define BUFF_REM_FIELD(buffer,field) ((buffer).header->status &= ~(field))
+#define BUFF_IS_SET(buffer,field) (((buffer).header->status & (field))==(field))
 #endif

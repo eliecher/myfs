@@ -10,20 +10,20 @@ inode_t inode_table[MAX_ACTIVE_INODES];
 int find_in_inode_table(inode_no_t inode_no)
 {
 	int h1 = inode_no % MAX_ACTIVE_INODES;
-	int h2 = inode_no % (MAX_ACTIVE_INODES - 1);
+	int h2 = 1;
 	int i = h1;
 	int inactive = MAX_ACTIVE_INODES;
 	do
-	{											  /* exhaustive search is done on the table */
-		if (inode_table[i].status & INODE_ACTIVE) /* if table entry is active */
+	{												   /* exhaustive search is done on the table */
+		if (INO_IS_SET(inode_table + i, INODE_ACTIVE)) /* if table entry is active */
 		{
 			inactive--;
 			if (inode_table[i].inode_no == inode_no)
 			{
 				if (inode_table[i].status & INODE_LOCKED)
 				{
-					sprintf(err, "needed inode (%u) is locked\n", inode_no);
-					perror(err);
+					/* 					sprintf(err, "needed inode (%u) is locked\n", inode_no);
+										perror(err); */
 					return -1;
 				}
 				return i;
@@ -41,7 +41,7 @@ int init_table_entry(inode_no_t inode_no)
 	int i = h1;
 	do
 	{
-		if (!(inode_table[i].status & INODE_ACTIVE))
+		if (!INO_IS_SET(inode_table + i, INODE_ACTIVE))
 		{
 			inode_table[i].inode_no = inode_no;
 			inode_table[i].status = INODE_DEFAULT_STATUS | INODE_ACTIVE;
@@ -57,7 +57,7 @@ int iget(inode_no_t inode_no, inode_t **inode)
 {
 	if (inode_no > super_block.num_inodes || inode_no == 0)
 	{
-		perror("iget: invalid inode number\n");
+		// perror("iget: invalid inode number\n");
 		return -1;
 	}
 	int i = find_in_inode_table(inode_no);
@@ -72,36 +72,32 @@ int iget(inode_no_t inode_no, inode_t **inode)
 	}
 	else if (i == -2) /* not in table and no free space */
 	{
-		perror("iget: no free space in inode table\n");
+		/* 		perror("iget: no free space in inode table\n"); */
 		return -1;
 	}
 	else if (i == -1) /* other errors */
 	{
-		perror("iget: error\n");
+		/* 		perror("iget: error\n"); */
 		return -1;
 	}
 	/* inode should be read from the disk */
 	block_no_t block_no = INODE_NO_TO_BLOCK_NO(inode_no);
 	buffer_t buffer;
-	if (bread(block_no, &buffer) != 0)
-	{
-		perror("iget: cannot read inode from disk\n");
-		return -1;
-	}
+	bread(block_no, &buffer);
 	i = init_table_entry(inode_no);
 	inode_ptr = *inode = inode_table + i;
 	offset_t inode_byte_offset = INODE_NO_TO_BYTE_OFF(inode_no);
 	memcpy(&(inode_ptr->disk_inode), buffer.data->b + inode_byte_offset, DISK_INODE_SIZE);
 	brelse(&buffer);
-	inode_ptr->reference_count++;	   /* increase reference count */
-	inode_ptr->status |= INODE_LOCKED; /* lock the inode */
+	inode_ptr->reference_count++;			/* increase reference count */
+	INO_SET_FIELD(inode_ptr, INODE_LOCKED); /* lock the inode */
 	return 0;
 }
 
 int iput(inode_t *inode)
 {
-	if (!(inode->status & INODE_LOCKED))
-		inode->status |= INODE_LOCKED;
+	if (!INO_IS_SET(inode, INODE_LOCKED))
+		INO_SET_FIELD(inode, INODE_LOCKED);
 	inode->reference_count--;
 	if (inode->reference_count == 0)
 	{
@@ -112,17 +108,13 @@ int iput(inode_t *inode)
 			// todo clear inode
 			INO_SET_FIELD(inode, INODE_MODIFIED);
 			ifree(inode->inode_no);
+			return 0;
 		}
-		if (inode->status & INODE_MODIFIED)
+		else if (inode->status & INODE_MODIFIED)
 		{
 			block_no_t block_no = INODE_NO_TO_BLOCK_NO(inode->inode_no);
 			buffer_t buffer;
-			if (bread(block_no, &buffer))
-			{
-				perror("iput: cannot write inode to disk\n");
-				return -1;
-			}
-
+			bread(block_no, &buffer);
 			offset_t inode_byte_offset = INODE_NO_TO_BYTE_OFF(inode->inode_no);
 			memcpy(buffer.data->b + inode_byte_offset, &(inode->disk_inode), DISK_INODE_SIZE);
 			BUFF_SET_FIELD(buffer, BUFF_MODIFIED);
@@ -144,7 +136,7 @@ int bmap(inode_t *inode, offset_t offset, block_no_t *block_no, offset_t *byte_o
 	int indirection_lvl = -1;
 	block_no_t index_block;
 	offset_t fsz = inode->disk_inode.size;
-	if (offset >= MAX_FILE_SIZE)
+	if (offset >= MAX_FILE_SIZE || offset < 0)
 	{
 		return -1;
 	}
@@ -154,10 +146,7 @@ int bmap(inode_t *inode, offset_t offset, block_no_t *block_no, offset_t *byte_o
 		if (fsz != 0 && offset / MY_BLK_SIZE == (fsz - 1) / MY_BLK_SIZE)
 		{
 			/* case: offset being mapped is in same logical block as last byte of the file */
-			if (bmap(inode, fsz - 1, block_no, byte_offset, num_bytes_in_block) != 0)
-			{
-				return -1;
-			}
+			bmap(inode, fsz - 1, block_no, byte_offset, num_bytes_in_block);
 		}
 		else
 		{
@@ -202,44 +191,22 @@ int bmap(inode_t *inode, offset_t offset, block_no_t *block_no, offset_t *byte_o
 			loc_of_index = encode(index, inode->key);
 		else
 			loc_of_index = index;
-		if (bread(index_block, &buffer))
-		{
-			perror("bmap: corrupted index\n");
-			return -1;
-		}
+		bread(index_block, &buffer);
 		memcpy(&index_block, buffer.data->b + (loc_of_index * sizeof(block_no_t)), sizeof(block_no_t));
 		brelse(&buffer);
 		offset = offset % siz_index[indirection_lvl - 1];
 		fsz -= index * siz_index[indirection_lvl - 1];
 		indirection_lvl--;
 	}
-	if (index_block == 0)
+	*block_no = index_block;
+	if ((fsz - 1) / MY_BLK_SIZE == offset / MY_BLK_SIZE)
 	{
-		*block_no = 0;
-		*byte_offset = offset % MY_BLK_SIZE;
-		if ((fsz - 1) / MY_BLK_SIZE == offset / MY_BLK_SIZE)
-		{
-			*num_bytes_in_block = fsz - offset;
-		}
-		else
-		{
-			*num_bytes_in_block = MY_BLK_SIZE - *byte_offset;
-		}
+		*num_bytes_in_block = fsz - offset;
 	}
 	else
 	{
-		*block_no = index_block;
-		*byte_offset = offset % MY_BLK_SIZE;
-		if (fsz < MY_BLK_SIZE)
-		{
-			*num_bytes_in_block = fsz - offset;
-		}
-		else
-		{
-			*num_bytes_in_block = MY_BLK_SIZE - *byte_offset;
-		}
+		*num_bytes_in_block = MY_BLK_SIZE - *byte_offset;
 	}
-
 	return 0;
 }
 
@@ -271,13 +238,7 @@ int namei(const char *path, inode_t **inode)
 	while (path[0] != '\0' && (path[0] != '/' || path[1] != '\0'))
 	{
 		int l = extract_name(path, partpath);
-		if (l == 0)
-		{
-			iput(cur);
-			perror("namei: cannot read path\n");
-			return -1;
-		}
-		if (cur->disk_inode.type != FT_DIR)
+		if (l == 0 || cur->disk_inode.type != FT_DIR)
 		{
 			iput(cur);
 			perror("namei: cannot resolve path\n");
@@ -309,11 +270,7 @@ int ialloc(inode_t **inode)
 	block_no = INODE_NO_TO_BLOCK_NO(super_block.ifreeptr - 1);
 	offset = INODE_NO_TO_BYTE_OFF(super_block.ifreeptr - 1);
 	buffer_t buffer;
-	if (bread(block_no, &buffer) != 0)
-	{
-		perror("ialloc: error\n");
-		return -1;
-	}
+	bread(block_no, &buffer);
 	/* calculate offset of list element in the inode */
 	offset += offsetof(disk_inode_t, index) + sizeof(inode_no_t) * (INODE_INDEX_COUNT - super_block.ifreecount);
 	memcpy(&inode_no, buffer.data->b + offset, sizeof(inode_no_t));
@@ -359,7 +316,7 @@ int ifree(inode_no_t inode_no)
 			return -1;
 		}
 		memcpy(&disk_inode, buffer.data->b + offset, DISK_INODE_SIZE);
-		// todo: clear parameters for freed inode
+		clear_inode(&disk_inode);
 		*((block_no_t *)(&disk_inode.index) + INODE_INDEX_COUNT - 1) = super_block.ifreeptr;
 		memcpy(buffer.data->b + offset, &disk_inode, DISK_INODE_SIZE);
 		BUFF_SET_FIELD(buffer, BUFF_MODIFIED);
@@ -371,23 +328,15 @@ int ifree(inode_no_t inode_no)
 	{
 		block_no = INODE_NO_TO_BLOCK_NO(inode_no);
 		offset = INODE_NO_TO_BYTE_OFF(inode_no);
-		if (bread(block_no, &buffer) != 0)
-		{
-			perror("ifree: cannot access free inode\n");
-			return -1;
-		}
+		bread(block_no, &buffer);
 		memcpy(&disk_inode, buffer.data->b + offset, DISK_INODE_SIZE);
-		// todo: clear parameters for freed inode
+		clear_inode(&disk_inode);
 		memcpy(buffer.data->b + offset, &disk_inode, DISK_INODE_SIZE);
 		BUFF_SET_FIELD(buffer, BUFF_MODIFIED);
 		brelse(&buffer);
 		block_no = INODE_NO_TO_BLOCK_NO(super_block.ifreeptr);
 		offset = INODE_NO_TO_BYTE_OFF(super_block.ifreeptr);
-		if (bread(block_no, &buffer) != 0)
-		{
-			perror("ifree: cannot access free inode\n");
-			return -1;
-		}
+		bread(block_no, &buffer);
 		memcpy(&disk_inode, buffer.data->b + offset, DISK_INODE_SIZE);
 		super_block.ifreecount++;
 		*((block_no_t *)(&disk_inode.index) + INODE_INDEX_COUNT - super_block.ifreecount) = inode_no;
@@ -398,7 +347,7 @@ int ifree(inode_no_t inode_no)
 	return 0;
 }
 
-int add_physical_block(inode_t *inode, block_no_t logical_block_no, block_no_t *block_no)
+int add_physical_block(inode_t *inode, block_no_t logical_block_no, block_no_t block_no)
 {
 	buffer_t buffer;
 	offset_t offset = logical_block_no * MY_BLK_SIZE;
@@ -433,7 +382,7 @@ int add_physical_block(inode_t *inode, block_no_t logical_block_no, block_no_t *
 		indirection_lvl = 3;
 		/* handle 3 degree index */
 	}
-	while (indirection_lvl != 0)
+	while (indirection_lvl != 1)
 	{
 		int index = offset / siz_index[indirection_lvl - 1];
 		/* logical index entry number in index */
@@ -454,13 +403,26 @@ int add_physical_block(inode_t *inode, block_no_t logical_block_no, block_no_t *
 			brelse(&buffer);
 			bread(index_block, &buffer);
 			memcpy(buffer.data->b + (loc_of_index * sizeof(block_no_t)), &entry, sizeof(block_no_t));
-			BUFF_SET_FIELD(buffer,BUFF_MODIFIED);
+			BUFF_SET_FIELD(buffer, BUFF_MODIFIED);
 			brelse(&buffer);
 		}
 		offset = offset % siz_index[indirection_lvl - 1];
 		indirection_lvl--;
 		index_block = entry;
 	}
-	*block_no = index_block;
+	int index = offset / siz_index[0];
+	int loc_of_index;
+	if (inode->disk_inode.type == FT_FIL)
+		loc_of_index = encode(index, inode->key);
+	else
+		loc_of_index = index;
+	block_no_t entry;
+	bread(index_block, &buffer);
+	memcpy(&entry, buffer.data->b + (loc_of_index * sizeof(block_no_t)), sizeof(block_no_t));
+	memcpy(buffer.data->b + (loc_of_index * sizeof(block_no_t)), sizeof(block_no_t), sizeof(block_no_t));
+	BUFF_SET_FIELD(buffer, BUFF_MODIFIED);
+	brelse(&buffer);
+	if (entry != 0)
+		bfree(entry);
 	return 0;
 }

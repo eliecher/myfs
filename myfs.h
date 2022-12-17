@@ -86,7 +86,8 @@ typedef struct
 typedef struct
 {
 	inode_no_t inode_no;
-	char name[12];
+	u_int16_t type;
+	char name[10];
 } dir_entry_t;
 
 typedef struct
@@ -118,12 +119,13 @@ extern ssize_t mywrite(int, byte_t *, size_t);
 /*  */extern offset_t mylseek(int, offset_t , int);
 /*  */extern int myclose(int);
 /*  */extern int mycreat(const char *, permission_t);
-extern int mymkdir(const char *, const char *);
-extern int myrmdir(const char *);
-extern int mylink(const char *, const char *);
+/*  */extern int mymkdir(const char *, const char *);
+/*  */extern int myrmdir(const char *);
+/*  */extern int mylink(const char *, const char *);
 extern int myunlink(const char *);
-extern int encode(int, byte_t[KEY_SIZE]);
-extern int add_physical_block(inode_t*,block_no_t, block_no_t*);
-/*  */extern inode_no_t dir_lookup(inode_t *, const char *);
-extern int add_dir_entry(inode_t* ,inode_no_t,const char*);
+extern int encode(int, byte_t[KEY_SIZE],...);
+/*  */extern int add_physical_block(inode_t*,block_no_t, block_no_t);
+/*  */extern dir_entry_t dir_lookup(inode_t *, const char *, offset_t*);
+/*  */extern int add_dir_entry(inode_t* ,dir_entry_t);
+/*  */extern int rem_dir_entry(inode_t* ,offset_t);
 #endif

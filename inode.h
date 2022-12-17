@@ -31,4 +31,6 @@
 #define INO_SET_FIELD(inoptr,field) ((inoptr)->status |= (field))
 #define INO_REM_FIELD(inoptr,field) ((inoptr)->status &= (~field))
 #define INO_IS_SET(inoptr,field) (((inoptr)->status & (field)) == (field))
+
+extern void clear_inode(disk_inode_t*);
 #endif
