@@ -24,7 +24,7 @@ int balloc(buffer_t *buffer)
 		super_block.bfreeptr = t;
 		memset(buff.data->b, 0, MY_BLK_SIZE);
 		BUFF_SET_FIELD(buff, BUFF_MODIFIED);
-		super_block.bfreecount = MY_BLK_SIZE / sizeof(block_no_t);
+		super_block.bfreecount = INDEX_SIZE;
 		return 0;
 	}
 	brelse(&buff);
@@ -34,7 +34,7 @@ int balloc(buffer_t *buffer)
 int bfree(block_no_t block_no)
 {
 	buffer_t buffer;
-	if (super_block.bfreecount == MY_BLK_SIZE / sizeof(block_no_t))
+	if (super_block.bfreecount == INDEX_SIZE)
 	{
 		/* first block is full, add new block */
 		super_block.bfreecount = 1;

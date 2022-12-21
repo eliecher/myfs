@@ -156,11 +156,15 @@ int mycreat(const char *path, permission_t perm)
 		iput(dir);
 		return -1;
 	}
-	add_dir_entry(dir, fil_inode->inode_no, filename + 1);
+	dir_entry_t dir_entry = {.inode_no = fil_inode->inode_no, .type = FT_FIL};
+	memset(dir_entry.name, 0, MAX_FILE_NAME_SIZE);
+	memcpy(dir_entry.name, filename, fnamelen);
+	add_dir_entry(dir, dir_entry);
 	/*
 		todo: set entries of inode for new file
 	*/
 	fil_inode->disk_inode.links++;
+	fil_inode->disk_inode.permission = perm;
 	fil_inode->disk_inode.type = FT_FIL;
 	INO_SET_FIELD(fil_inode, INODE_MODIFIED);
 	iput(fil_inode);

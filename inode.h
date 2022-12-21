@@ -1,7 +1,6 @@
 #include "myfs.h"
 #ifndef INODE_H
 #define INODE_H
-#define INDEX_SIZE (MY_BLK_SIZE / sizeof(block_no_t))
 
 #define MAX_ACTIVE_INODES 16
 #define INODE_DEFAULT_STATUS 0b0
@@ -12,8 +11,8 @@
 #define FT_DIR 0b1
 #define FT_FIL 0b10
 
+const disk_inode_t model_unused_inode = {.index = {.deg1 = {0}}, .links = 0, .permission = {.permissions = 0}, .protection = 0, .size = 0, .size_on_disk = 0, .type = FT_NONE};
 
-#define INODES_PER_BLOCK (MY_BLK_SIZE) / (DISK_INODE_SIZE)
 #define SIZ_0DEG_INDEX ((offset_t)MY_BLK_SIZE)
 #define SIZ_1DEG_INDEX (INDEX_SIZE * SIZ_0DEG_INDEX)
 #define SIZ_2DEG_INDEX (INDEX_SIZE * SIZ_1DEG_INDEX)
@@ -28,9 +27,9 @@
 #define INODE_NO_TO_BLOCK_NO(ino) (NUM_SUPER_BLOCKS + ((ino)-1) / INODES_PER_BLOCK)
 #define INODE_NO_TO_BYTE_OFF(ino) (((ino)-1) % INODES_PER_BLOCK * DISK_INODE_SIZE)
 
-#define INO_SET_FIELD(inoptr,field) ((inoptr)->status |= (field))
-#define INO_REM_FIELD(inoptr,field) ((inoptr)->status &= (~field))
-#define INO_IS_SET(inoptr,field) (((inoptr)->status & (field)) == (field))
+#define INO_SET_FIELD(inoptr, field) ((inoptr)->status |= (field))
+#define INO_REM_FIELD(inoptr, field) ((inoptr)->status &= (~field))
+#define INO_IS_SET(inoptr, field) (((inoptr)->status & (field)) == (field))
 
-extern void clear_inode(disk_inode_t*);
+extern void clear_inode(disk_inode_t *);
 #endif

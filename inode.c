@@ -89,8 +89,9 @@ int iget(inode_no_t inode_no, inode_t **inode)
 	offset_t inode_byte_offset = INODE_NO_TO_BYTE_OFF(inode_no);
 	memcpy(&(inode_ptr->disk_inode), buffer.data->b + inode_byte_offset, DISK_INODE_SIZE);
 	brelse(&buffer);
-	inode_ptr->reference_count++;			/* increase reference count */
 	INO_SET_FIELD(inode_ptr, INODE_LOCKED); /* lock the inode */
+	inode_ptr->reference_count++;			/* increase reference count */
+	memset(inode_ptr->key, 0, KEY_SIZE);
 	return 0;
 }
 
@@ -101,21 +102,22 @@ int iput(inode_t *inode)
 	inode->reference_count--;
 	if (inode->reference_count == 0)
 	{
+		block_no_t block_no = INODE_NO_TO_BLOCK_NO(inode->inode_no);
+		offset_t inode_byte_offset = INODE_NO_TO_BYTE_OFF(inode->inode_no);
+		buffer_t buffer;
 		if (inode->disk_inode.links == 0)
 		{
 			free_all_blocks(inode);
-			inode->disk_inode.type = FT_NONE;
-			// todo clear inode
-			INO_SET_FIELD(inode, INODE_MODIFIED);
 			ifree(inode->inode_no);
+			bread(block_no, &buffer);
+			memcpy(buffer.data->b + inode_byte_offset, &model_unused_inode, DISK_INODE_SIZE);
+			BUFF_SET_FIELD(buffer, BUFF_MODIFIED);
+			brelse(&buffer);
 			return 0;
 		}
 		else if (inode->status & INODE_MODIFIED)
 		{
-			block_no_t block_no = INODE_NO_TO_BLOCK_NO(inode->inode_no);
-			buffer_t buffer;
 			bread(block_no, &buffer);
-			offset_t inode_byte_offset = INODE_NO_TO_BYTE_OFF(inode->inode_no);
 			memcpy(buffer.data->b + inode_byte_offset, &(inode->disk_inode), DISK_INODE_SIZE);
 			BUFF_SET_FIELD(buffer, BUFF_MODIFIED);
 			brelse(&buffer);
@@ -247,14 +249,15 @@ int namei(const char *path, inode_t **inode)
 		path += l + 1;
 		if (l == 1 && partpath[0] == '.')
 			continue;
-		inode_no_t nextinode = dir_lookup(cur, partpath);
+		offset_t found_at;
+		dir_entry_t dir_entry = dir_lookup(cur, partpath, &found_at);
 		iput(cur);
-		if (nextinode == 0)
+		if (dir_entry.inode_no == 0)
 		{
 			perror("namei: cannot resolve path\n");
 			return -1;
 		}
-		iget(nextinode, &cur);
+		iget(dir_entry.inode_no, &cur);
 	}
 	*inode = cur;
 	return 0;
@@ -267,8 +270,8 @@ int ialloc(inode_t **inode)
 	offset_t offset;
 	inode_no_t inode_no;
 	/* get location of inode on disk */
-	block_no = INODE_NO_TO_BLOCK_NO(super_block.ifreeptr - 1);
-	offset = INODE_NO_TO_BYTE_OFF(super_block.ifreeptr - 1);
+	block_no = INODE_NO_TO_BLOCK_NO(super_block.ifreeptr);
+	offset = INODE_NO_TO_BYTE_OFF(super_block.ifreeptr);
 	buffer_t buffer;
 	bread(block_no, &buffer);
 	/* calculate offset of list element in the inode */
@@ -293,11 +296,7 @@ int ialloc(inode_t **inode)
 		perror("ialloc: could not get free inode\n");
 		return -1;
 	}
-	inode_t *inode_ptr = *inode;
-	/*
-		todo: set parameters for new inode
-	*/
-	INO_SET_FIELD(inode_ptr, INODE_MODIFIED);
+	//? check if there is some fields to be set for new inodes
 	return 0;
 }
 int ifree(inode_no_t inode_no)
@@ -347,7 +346,7 @@ int ifree(inode_no_t inode_no)
 	return 0;
 }
 
-int add_physical_block(inode_t *inode, block_no_t logical_block_no, block_no_t block_no)
+int add_physical_block(inode_t *inode, block_no_t logical_block_no, block_no_t physical_block_no)
 {
 	buffer_t buffer;
 	offset_t offset = logical_block_no * MY_BLK_SIZE;
@@ -419,10 +418,69 @@ int add_physical_block(inode_t *inode, block_no_t logical_block_no, block_no_t b
 	block_no_t entry;
 	bread(index_block, &buffer);
 	memcpy(&entry, buffer.data->b + (loc_of_index * sizeof(block_no_t)), sizeof(block_no_t));
-	memcpy(buffer.data->b + (loc_of_index * sizeof(block_no_t)), sizeof(block_no_t), sizeof(block_no_t));
+	memcpy(buffer.data->b + (loc_of_index * sizeof(block_no_t)), &physical_block_no, sizeof(block_no_t));
 	BUFF_SET_FIELD(buffer, BUFF_MODIFIED);
 	brelse(&buffer);
 	if (entry != 0)
 		bfree(entry);
 	return 0;
+}
+
+void free_index(block_t *index, int degree)
+{
+	if (degree == 1)
+	{
+		for (offset_t offset = 0; offset < MY_BLK_SIZE; offset += sizeof(block_t))
+		{
+			block_no_t block_no = 0;
+			memcpy(&block_no, index + offset, sizeof(block_no_t));
+			if (block_no != 0)
+				bfree(block_no);
+		}
+	}
+	for (offset_t offset = 0; offset < MY_BLK_SIZE; offset += sizeof(block_t))
+	{
+		block_no_t block_no = 0;
+		memcpy(&block_no, index + offset, sizeof(block_no_t));
+		if (block_no == 0)
+			continue;
+		block_t index_block;
+		buffer_t buffer;
+		bread(block_no, &buffer);
+		memcpy(&index_block, buffer.data, MY_BLK_SIZE);
+		brelse(&buffer);
+		free_index(&index_block, degree - 1);
+		bfree(block_no);
+	}
+}
+
+int free_all_blocks(inode_t *inode)
+{
+	block_no_t *index = &(inode->disk_inode.index);
+	for (int i = 0; i < NUM_0DEG_INDEX; i++)
+	{
+		if (*index != 0)
+		{
+			INO_SET_FIELD(inode, INODE_MODIFIED);
+			bfree(*index);
+		}
+		*index = 0;
+		index++;
+	}
+	buffer_t buffer;
+	block_t index_block;
+	for (int i = 0; i < NUM_1DEG_INDEX; i++)
+	{
+		if (*index != 0)
+		{
+			bread(*index, &buffer);
+			memcpy(&index_block, buffer.data, MY_BLK_SIZE);
+			brelse(*index);
+			free_index(&index_block, 1);
+			bfree(*index);
+			INO_SET_FIELD(inode, INODE_MODIFIED);
+		}
+		*index = 0;
+		index++;
+	}
 }

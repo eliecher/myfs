@@ -111,10 +111,12 @@ int add_dir_entry(inode_t *dir, dir_entry_t new_entry)
 	BUFF_SET_FIELD(buffer, BUFF_MODIFIED);
 	block_no_t physical_block_no = buffer.header->block_no;
 	brelse(&buffer);
-	dir->disk_inode.size_on_disk += DIR_ENTRY_SIZE;
+	dir->disk_inode.links++;
 	INO_SET_FIELD(dir, INODE_MODIFIED);
 	if (block_no == 0) /* if data was written on a new block */
 	{
+		dir->disk_inode.size_on_disk += MY_BLK_SIZE;
+		INO_SET_FIELD(dir, INODE_MODIFIED);
 		add_physical_block(dir, loc / MY_BLK_SIZE, physical_block_no);
 	}
 	return 0;
@@ -131,7 +133,7 @@ int rem_dir_entry(inode_t *dir, offset_t loc)
 	buffer_t buffer;
 	bread(block_no, &buffer);
 	memset(buffer.data->b + byte_offset, 0, DIR_ENTRY_SIZE);
-	dir->disk_inode.size_on_disk -= DIR_ENTRY_SIZE;
+	dir->disk_inode.links--;
 	INO_SET_FIELD(dir, INODE_MODIFIED);
 	brelse(&buffer);
 	return 0;
@@ -163,12 +165,6 @@ int mymkdir(const char *parent_dir, const char *dir_name)
 	new_entry.type = dir_inode->disk_inode.type = FT_DIR;
 	INO_SET_FIELD(dir_inode, INODE_MODIFIED);
 	new_entry.inode_no = dir_inode->inode_no;
-	if (add_dir_entry(parent_dir, new_entry) != 0)
-	{
-		ifree(new_entry.inode_no);
-		iput(parent_dir);
-		return -1;
-	}
 	dir_entry_t parent_dir_entry;
 	{
 		memset(parent_dir_entry.name, 0, MAX_FILE_NAME_SIZE);
@@ -176,11 +172,12 @@ int mymkdir(const char *parent_dir, const char *dir_name)
 	}
 	parent_dir_entry.inode_no = par_dir_inode->inode_no;
 	parent_dir_entry.type = FT_DIR;
-	iput(par_dir_inode);
 	add_dir_entry(dir_inode, parent_dir_entry);
 	dir_inode->disk_inode.links = 1;
 	INO_SET_FIELD(dir_inode, INODE_MODIFIED);
 	iput(dir_inode);
+	add_dir_entry(parent_dir, new_entry);
+	iput(par_dir_inode);
 	return 0;
 }
 
@@ -214,7 +211,7 @@ int myrmdir(const char *dir_path)
 	{
 		if (iget(dir_entry.inode_no, &dir) == 0)
 		{
-			if (dir->disk_inode.size_on_disk == DIR_ENTRY_SIZE)
+			if (dir->disk_inode.links == 1)
 			{
 				rem_dir_entry(par, found_at);
 				dir->disk_inode.links = 0;
@@ -256,22 +253,26 @@ int mylink(const char *existing_path, const char *new_path)
 	{
 		if (inode->disk_inode.type == FT_FIL)
 		{
-			if (namei(par_path, &par_dir) == 0 && par_dir->disk_inode.type == FT_DIR)
+			if (namei(par_path, &par_dir) == 0)
 			{
-				dir_entry_t dir_entry;
-				inode->disk_inode.links++;
-				INO_SET_FIELD(inode, INODE_MODIFIED);
-				dir_entry.inode_no = inode->inode_no;
-				iput(inode);
-				memcpy(dir_entry.name, fil_name, MAX_FILE_NAME_SIZE);
-				dir_entry.type = FT_FIL;
-				if (add_dir_entry(par_dir, dir_entry) == 0)
+				if (par_dir->disk_inode.type == FT_DIR)
 				{
+					dir_entry_t dir_entry;
+					inode->disk_inode.links++;
+					INO_SET_FIELD(inode, INODE_MODIFIED);
+					dir_entry.inode_no = inode->inode_no;
+					iput(inode);
+					memcpy(dir_entry.name, fil_name, MAX_FILE_NAME_SIZE);
+					dir_entry.type = FT_FIL;
+					if (add_dir_entry(par_dir, dir_entry) == 0)
+					{
+						iput(par_dir);
+						return 0;
+					}
 					iput(par_dir);
-					return 0;
+					return -1;
 				}
 				iput(par_dir);
-				return -1;
 			}
 		}
 		iput(inode);
